@@ -4,7 +4,6 @@ import (
 	"context"
 	"github.com/2015wuji01/deck"
 	amqp "github.com/rabbitmq/amqp091-go"
-	"github.com/zeromicro/go-zero/core/fx"
 	"time"
 )
 
@@ -103,7 +102,7 @@ func (c *Consumer) ResetChannel() error {
 	return nil
 }
 
-func (c *Consumer) Consume(ctx context.Context, queue string, handler func(stream fx.Stream)) error {
+func (c *Consumer) Consume(ctx context.Context, queue string, handler func(source <-chan any)) error {
 	if queue == "" {
 		c.cli.l.Println("队列名称不能为空")
 		return EmptyQueueNameErr
@@ -123,41 +122,43 @@ func (c *Consumer) Consume(ctx context.Context, queue string, handler func(strea
 	}
 
 	// 2.启动消费者
-	handler(fx.From(func(source chan<- any) {
-		// 接收消息
-		for {
-			// channel 关闭，自动重新获取 channel
-			if c.ch == nil || c.ch.IsClosed() {
-				c.cli.l.Println("检查到 channel 关闭，尝试重新获取 channel")
-				if err := c.ResetChannel(); err != nil {
-					c.cli.l.Println("获取 channel 失败，等待 1s 后重试", err)
-					time.Sleep(1 * time.Second)
-					continue
-				}
-			}
-			msgs, err := c.ch.Consume(q.Name, "", false, false, false, false, nil)
-			if err != nil {
-				c.cli.l.Println("消费者启动失败，等待 1s 后重试", err)
+	source := make(chan any)
+	go func() {
+		handler(source)
+	}()
+
+	// 接收消息
+	for {
+		// channel 关闭，自动重新获取 channel
+		if c.ch == nil || c.ch.IsClosed() {
+			c.cli.l.Println("检查到 channel 关闭，尝试重新获取 channel")
+			if err := c.ResetChannel(); err != nil {
+				c.cli.l.Println("获取 channel 失败，等待 1s 后重试", err)
 				time.Sleep(1 * time.Second)
 				continue
 			}
+		}
+		msgs, err := c.ch.Consume(q.Name, "", false, false, false, false, nil)
+		if err != nil {
+			c.cli.l.Println("消费者启动失败，等待 1s 后重试", err)
+			time.Sleep(1 * time.Second)
+			continue
+		}
 
-		LOOP:
-			for {
-				select {
-				case <-ctx.Done():
-					c.cli.l.Println("接收到 context.Done 信号，退出接收消息")
-					return
-				case msg, ok := <-msgs:
-					if !ok {
-						break LOOP
-					}
-					source <- msg
+	LOOP:
+		for {
+			select {
+			case <-ctx.Done():
+				c.cli.l.Println("接收到 context.Done 信号，退出接收消息")
+				return nil
+			case msg, ok := <-msgs:
+				if !ok {
+					break LOOP
 				}
+				source <- msg
 			}
 		}
-	}))
-	return nil
+	}
 }
 
 // QueueDeclare 声明队列

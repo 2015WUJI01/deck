@@ -2,10 +2,9 @@ package deck
 
 import (
 	"context"
-	"github.com/zeromicro/go-zero/core/fx"
 )
 
 type Consumer interface {
-	Consume(ctx context.Context, queue string, handler func(stream fx.Stream)) error
+	Consume(ctx context.Context, queue string, handler func(source <-chan any)) error
 	Close() error
 }
