@@ -2,6 +2,7 @@ package rabbitmq
 
 import (
 	"context"
+	"github.com/2015wuji01/go-deck"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/zeromicro/go-zero/core/fx"
 	"time"
