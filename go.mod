@@ -1,4 +1,4 @@
-module github.com/2015wuji01/go-deck
+module github.com/2015wuji01/deck
 
 go 1.18
 
