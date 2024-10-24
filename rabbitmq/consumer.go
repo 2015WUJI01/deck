@@ -60,6 +60,9 @@ func SetAckHandler(ackHandler func(ctx context.Context, acknowledger amqp.Acknow
 type Consumer struct {
 	cli *Client
 
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	config ConsumerConfig
 	ch     *amqp.Channel
 
@@ -74,8 +77,11 @@ func (cli *Client) NewConsumer(opts ...ConfigOption) (deck.Consumer, error) {
 		}
 	}
 
+	ctx, cancel := context.WithCancel(cli.ctx)
 	consumer := &Consumer{
 		cli:    cli,
+		ctx:    ctx,
+		cancel: cancel,
 		config: config,
 	}
 
@@ -99,12 +105,18 @@ func (c *Consumer) ResetChannel() error {
 		return err
 	}
 	c.ch = ch
+	//go func() {
+	//	shutdown := c.ch.NotifyClose(make(chan *amqp.Error))
+	//	e := <-shutdown
+	//	c.cli.l.Info(c.cli.ctx, "channel 关闭 %+v", e)
+	//	c.Stop()
+	//}()
 	return nil
 }
 
 func (c *Consumer) Consume(ctx context.Context, queue string, handler func(source <-chan any)) error {
 	if queue == "" {
-		c.cli.l.Println("队列名称不能为空")
+		c.cli.l.Error(c.cli.ctx, "队列名称不能为空")
 		return EmptyQueueNameErr
 	}
 
@@ -131,16 +143,17 @@ func (c *Consumer) Consume(ctx context.Context, queue string, handler func(sourc
 	for {
 		// channel 关闭，自动重新获取 channel
 		if c.ch == nil || c.ch.IsClosed() {
-			c.cli.l.Println("检查到 channel 关闭，尝试重新获取 channel")
+			//c.cli.l.Info(c.cli.ctx, "检查到 channel 关闭，尝试重新获取 channel")
 			if err := c.ResetChannel(); err != nil {
-				c.cli.l.Println("获取 channel 失败，等待 1s 后重试", err)
+				c.cli.l.Warn(c.cli.ctx, "获取 channel 失败，等待 1s 后重试: %v", err)
 				time.Sleep(1 * time.Second)
 				continue
 			}
+			c.cli.l.Info(c.cli.ctx, "获取 channel 成功")
 		}
 		msgs, err := c.ch.Consume(q.Name, "", false, false, false, false, nil)
 		if err != nil {
-			c.cli.l.Println("消费者启动失败，等待 1s 后重试", err)
+			//c.cli.l.Warn(c.cli.ctx, "消费者启动失败，等待 1s 后重试: %v", err)
 			time.Sleep(1 * time.Second)
 			continue
 		}
@@ -148,8 +161,11 @@ func (c *Consumer) Consume(ctx context.Context, queue string, handler func(sourc
 	LOOP:
 		for {
 			select {
+			case <-c.ctx.Done():
+				c.cli.l.Info(c.cli.ctx, "consumer exit successfully")
+				return nil
 			case <-ctx.Done():
-				c.cli.l.Println("接收到 context.Done 信号，退出接收消息")
+				c.cli.l.Info(c.cli.ctx, "接收到 context.Done 信号，退出接收消息")
 				return nil
 			case msg, ok := <-msgs:
 				if !ok {
@@ -178,4 +194,8 @@ func (c *Consumer) QueueDeclare(name string, args map[string]interface{}) (amqp.
 
 func (c *Consumer) Close() error {
 	return c.ch.Close()
+}
+
+func (c *Consumer) Stop() {
+	c.cancel()
 }
